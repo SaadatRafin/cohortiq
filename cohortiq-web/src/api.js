@@ -1,0 +1,19 @@
+const API = import.meta.env.VITE_API_URL;
+
+async function j(url) {
+  const r = await fetch(url, {
+    headers: {
+      'ngrok-skip-browser-warning': 'true',
+      'Accept': 'application/json'
+    }
+  });
+  const ct = r.headers.get('content-type') || '';
+  const text = await r.text();
+  if (!r.ok) throw new Error(`HTTP ${r.status}: ${text.slice(0,200)}`);
+  if (ct.includes('application/json')) return JSON.parse(text);
+  throw new Error(`Expected JSON, got ${ct}: ${text.slice(0,200)}`);
+}
+
+export const getFunnel  = (days=30) => j(`${API}/metrics/funnel?days=${days}`);
+export const getTraffic = (days=30) => j(`${API}/metrics/traffic-source?days=${days}`);
+export const getAB      = (days=30) => j(`${API}/experiments/checkout_button?days=${days}`);
