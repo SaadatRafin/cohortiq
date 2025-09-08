@@ -14,6 +14,18 @@ async function j(url) {
   throw new Error(`Expected JSON, got ${ct}: ${text.slice(0,200)}`);
 }
 
+export async function apiGet(path) {
+  const r = await fetch(`${API}${path}`, {
+    headers: {
+      'Accept': 'application/json',
+      'ngrok-skip-browser-warning': 'true',
+    },
+    mode: 'cors',
+  });
+  if (!r.ok) throw new Error(`API ${r.status}`);
+  return r.json();
+}
+
 export const getFunnel  = (days=30) => j(`${API}/metrics/funnel?days=${days}`);
 export const getTraffic = (days=30) => j(`${API}/metrics/traffic-source?days=${days}`);
 export const getAB      = (days=30) => j(`${API}/experiments/checkout_button?days=${days}`);
