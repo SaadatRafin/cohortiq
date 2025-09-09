@@ -189,3 +189,90 @@ def retention(weeks: int = Query(5, ge=2, le=8)):
         key = str(cw)
         out.setdefault(key, []).append({"week": int(wk), "users": int(n)})
     return [{"cohort_week": k, "series": v} for k, v in out.items()]
+
+@app.get("/metrics/revenue")
+def metrics_revenue(days: int = Query(30, ge=1, le=365)):
+    sql = """
+      SELECT date(order_ts) AS d,
+             SUM(total) AS revenue,
+             COUNT(*) AS orders
+      FROM fct_orders
+      WHERE order_ts >= now() - (%s::text || ' days')::interval
+      GROUP BY 1
+      ORDER BY 1;
+    """
+    with pool.connection() as c, c.cursor() as cur:
+        cur.execute(sql, (days,))
+        rows = cur.fetchall()
+
+    total_rev = sum(float(r[1]) for r in rows)
+    total_orders = sum(int(r[2]) for r in rows)
+    aov = round(total_rev / total_orders, 2) if total_orders else None
+
+    return {
+        "days": days,
+        "daily": [{"date": str(r[0]), "revenue": float(r[1]), "orders": int(r[2])} for r in rows],
+        "totals": {"revenue": round(total_rev, 2), "orders": total_orders, "aov": aov},
+    }
+
+@app.get("/metrics/aov-by-source")
+def metrics_aov_by_source(days: int = Query(30, ge=1, le=365)):
+    sql = """
+      SELECT u.traffic_source,
+             COUNT(*) AS orders,
+             SUM(o.total) AS revenue,
+             AVG(o.total) AS aov
+      FROM fct_orders o
+      JOIN dim_user u USING (user_id)
+      WHERE o.order_ts >= now() - (%s::text || ' days')::interval
+      GROUP BY 1
+      ORDER BY revenue DESC NULLS LAST;
+    """
+    with pool.connection() as c, c.cursor() as cur:
+        cur.execute(sql, (days,))
+        rows = cur.fetchall()
+
+    return [
+        {
+          "traffic_source": src,
+          "orders": int(orders),
+          "revenue": float(rev),
+          "aov": round(float(aov), 2) if aov is not None else None
+        }
+        for src, orders, rev, aov in rows
+    ]
+
+@app.get("/metrics/top-products")
+def metrics_top_products(
+    days: int = Query(30, ge=1, le=365),
+    limit: int = Query(10, ge=1, le=100),
+):
+    sql = """
+      WITH p AS (
+        SELECT product_id, COUNT(*) AS qty
+        FROM fct_events
+        WHERE event_name = 'purchase'
+          AND event_ts >= now() - (%s::text || ' days')::interval
+        GROUP BY 1
+      )
+      SELECT p.product_id, d.category, d.price, p.qty,
+             (p.qty * d.price)::numeric(12,2) AS revenue
+      FROM p
+      JOIN dim_product d USING (product_id)
+      ORDER BY revenue DESC
+      LIMIT %s;
+    """
+    with pool.connection() as c, c.cursor() as cur:
+        cur.execute(sql, (days, limit))
+        rows = cur.fetchall()
+
+    return [
+        {
+          "product_id": pid,
+          "category": cat,
+          "price": float(price),
+          "qty": int(qty),
+          "revenue": float(rev),
+        }
+        for pid, cat, price, qty, rev in rows
+    ]
