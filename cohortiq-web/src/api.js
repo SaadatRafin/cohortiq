@@ -14,6 +14,24 @@ async function j(url) {
   throw new Error(`Expected JSON, got ${ct}: ${text.slice(0,200)}`);
 }
 
+async function getJSON(path) {
+  const r = await fetch(`${API}${path}`, {
+    mode: 'cors',
+    headers: {
+      'Accept': 'application/json',
+      'ngrok-skip-browser-warning': 'true',
+    }
+  });
+  if (!r.ok) throw new Error(`API ${r.status}`);
+  return r.json();
+}
+
+export const api = {
+  funnel: (days=30) => getJSON(`/metrics/funnel?days=${days}`),
+  trafficSource: (days=30) => getJSON(`/metrics/traffic-source?days=${days}`),
+  experimentCheckout: (days=30) => getJSON(`/experiments/checkout_button?days=${days}`)
+};
+
 export async function apiGet(path) {
   const r = await fetch(`${API}${path}`, {
     headers: {
