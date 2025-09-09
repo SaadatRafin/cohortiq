@@ -120,3 +120,72 @@ def experiment_checkout(days: int = Query(30, ge=1, le=365)):
                         "B":{"n":n_b,"buyers":x_b,"cr":round(p_b,4)}},
             "lift_abs": round(lift,5),
             "z_score": round(z,3) if z is not None else None}
+
+@app.get("/metrics/revenue-trend")
+def revenue_trend(days: int = Query(60, ge=1, le=365)):
+    sql = """
+      SELECT date(order_ts) AS d, SUM(total)::numeric(12,2) AS revenue
+      FROM fct_orders
+      WHERE order_ts >= now() - (%s::text || ' days')::interval
+      GROUP BY 1 ORDER BY 1;
+    """
+    with pool.connection() as c, c.cursor() as cur:
+        cur.execute(sql, (days,))
+        rows = cur.fetchall()
+    return [{"date": str(d), "revenue": float(r)} for d, r in rows]
+
+@app.get("/metrics/category")
+def category(days: int = Query(30, ge=1, le=365)):
+    sql = """
+    WITH buys AS (
+      SELECT e.product_id
+      FROM fct_events e
+      WHERE e.event_ts >= now() - (%s::text || ' days')::interval
+        AND e.event_name='purchase'
+    )
+    SELECT p.category,
+           COUNT(*) AS purchases,
+           ROUND(AVG(p.price)::numeric,2) AS avg_price
+    FROM buys b JOIN dim_product p ON p.product_id=b.product_id
+    GROUP BY 1 ORDER BY 2 DESC;
+    """
+    with pool.connection() as c, c.cursor() as cur:
+        cur.execute(sql, (days,))
+        return [{"category": cat, "purchases": n, "avg_price": float(ap)} for cat, n, ap in cur.fetchall()]
+    
+    @app.get("/metrics/retention")
+def retention(weeks: int = Query(5, ge=2, le=8)):
+    sql = """
+    WITH first_seen AS (
+      SELECT user_id, MIN(date(event_ts)) AS first_day
+      FROM fct_events
+      GROUP BY 1
+    ),
+    touches AS (
+      SELECT e.user_id, date(e.event_ts) AS d
+      FROM fct_events e
+    ),
+    joined AS (
+      SELECT t.user_id,
+             fs.first_day,
+             date_trunc('week', fs.first_day)::date AS cohort_week,
+             FLOOR(EXTRACT(EPOCH FROM (t.d - date_trunc('week', fs.first_day)))/(7*24*3600))::int AS wk
+      FROM touches t JOIN first_seen fs USING (user_id)
+    )
+    SELECT cohort_week,
+           wk,
+           COUNT(DISTINCT user_id) AS users
+    FROM joined
+    WHERE wk BETWEEN 0 AND %s-1
+    GROUP BY 1,2
+    ORDER BY 1,2;
+    """
+    with pool.connection() as c, c.cursor() as cur:
+        cur.execute(sql, (weeks,))
+        rows = cur.fetchall()
+    # return as [{cohort_week:'YYYY-MM-DD', series:[{week:0, users:...}, ...]}]
+    out = {}
+    for cw, wk, n in rows:
+        key = str(cw)
+        out.setdefault(key, []).append({"week": int(wk), "users": int(n)})
+    return [{"cohort_week": k, "series": v} for k, v in out.items()]
