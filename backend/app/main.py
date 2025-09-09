@@ -153,7 +153,7 @@ def category(days: int = Query(30, ge=1, le=365)):
         cur.execute(sql, (days,))
         return [{"category": cat, "purchases": n, "avg_price": float(ap)} for cat, n, ap in cur.fetchall()]
     
-    @app.get("/metrics/retention")
+@app.get("/metrics/retention")
 def retention(weeks: int = Query(5, ge=2, le=8)):
     sql = """
     WITH first_seen AS (
