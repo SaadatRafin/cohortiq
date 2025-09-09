@@ -1,18 +1,5 @@
-const API = import.meta.env.VITE_API_URL;
-
-async function j(url) {
-  const r = await fetch(url, {
-    headers: {
-      'ngrok-skip-browser-warning': 'true',
-      'Accept': 'application/json'
-    }
-  });
-  const ct = r.headers.get('content-type') || '';
-  const text = await r.text();
-  if (!r.ok) throw new Error(`HTTP ${r.status}: ${text.slice(0,200)}`);
-  if (ct.includes('application/json')) return JSON.parse(text);
-  throw new Error(`Expected JSON, got ${ct}: ${text.slice(0,200)}`);
-}
+// src/api.js
+const API = import.meta.env.VITE_API_URL; // e.g. "https://<your-ngrok-domain>/api"
 
 async function getJSON(path) {
   const r = await fetch(`${API}${path}`, {
@@ -22,28 +9,22 @@ async function getJSON(path) {
       'ngrok-skip-browser-warning': 'true',
     }
   });
-  if (!r.ok) throw new Error(`API ${r.status}`);
+  if (!r.ok) {
+    const text = await r.text().catch(() => '');
+    throw new Error(`API ${r.status} ${r.statusText}: ${text.slice(0,200)}`);
+  }
   return r.json();
 }
 
 export const api = {
-  funnel: (days=30) => getJSON(`/metrics/funnel?days=${days}`),
-  trafficSource: (days=30) => getJSON(`/metrics/traffic-source?days=${days}`),
-  experimentCheckout: (days=30) => getJSON(`/experiments/checkout_button?days=${days}`)
+  // existing
+  funnel: (days = 30) => getJSON(`/metrics/funnel?days=${days}`),
+  trafficSource: (days = 30) => getJSON(`/metrics/traffic-source?days=${days}`),
+  experimentCheckout: (days = 30) => getJSON(`/experiments/checkout_button?days=${days}`),
+
+  // new
+  revenue: (days = 30) => getJSON(`/metrics/revenue?days=${days}`),
+  aovBySource: (days = 30) => getJSON(`/metrics/aov-by-source?days=${days}`),
+  topProducts: (days = 30, limit = 10) => getJSON(`/metrics/top-products?days=${days}&limit=${limit}`),
+  retention: (weeks = 5) => getJSON(`/metrics/retention?weeks=${weeks}`),
 };
-
-export async function apiGet(path) {
-  const r = await fetch(`${API}${path}`, {
-    headers: {
-      'Accept': 'application/json',
-      'ngrok-skip-browser-warning': 'true',
-    },
-    mode: 'cors',
-  });
-  if (!r.ok) throw new Error(`API ${r.status}`);
-  return r.json();
-}
-
-export const getFunnel  = (days=30) => j(`${API}/metrics/funnel?days=${days}`);
-export const getTraffic = (days=30) => j(`${API}/metrics/traffic-source?days=${days}`);
-export const getAB      = (days=30) => j(`${API}/experiments/checkout_button?days=${days}`);
