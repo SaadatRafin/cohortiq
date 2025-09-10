@@ -1,9 +1,8 @@
-// src/App.jsx
 import { useEffect, useMemo, useState } from 'react';
-import { api } from './api';
+import { api, getApiBase, setApiBase } from './api';
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  BarChart, Bar, CartesianGrid, Legend, AreaChart, Area
+  BarChart, Bar, CartesianGrid, Legend, AreaChart, Area, PieChart, Pie, Cell
 } from 'recharts';
 import './index.css';
 
@@ -36,6 +35,19 @@ export default function App() {
   const [days, setDays] = useState(30);
   const [weeks, setWeeks] = useState(5);
 
+  // runtime API control (useful for GH Pages + ngrok)
+  const [apiBase, setApiBaseState] = useState(getApiBase());
+  function applyApiBase() {
+    const input = prompt('Set API base (e.g. https://YOUR-NGROK.ngrok-free.app/api):', apiBase || '');
+    if (input) {
+      setApiBase(input);
+      setApiBaseState(getApiBase());
+      // trigger reload of data:
+      loadAll(days);
+      loadRetention(weeks);
+    }
+  }
+
   // data
   const [funnel, setFunnel] = useState(null);
   const [ts, setTs] = useState([]);
@@ -44,52 +56,72 @@ export default function App() {
   const [aov, setAov] = useState([]);
   const [tops, setTops] = useState([]);
   const [ret, setRet] = useState(null);
+  const [cats, setCats] = useState([]);
 
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState(null);
 
-  useEffect(() => {
-    (async () => {
-      try {
-        setLoading(true);
-        const [f, t, e, r, a, tp] = await Promise.all([
-          api.funnel(days),
-          api.trafficSource(days),
-          api.experimentCheckout(days),
-          api.revenue(days),
-          api.aovBySource(days),
-          api.topProducts(days, 10),
-        ]);
-        setFunnel(f); setTs(t); setExp(e); setRev(r); setAov(a); setTops(tp);
-        setErr(null);
-      } catch (e) {
-        setErr(e.message);
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, [days]);
+  async function loadAll(d) {
+    try {
+      setLoading(true);
+      const [f, t, e, r, a, tp, c] = await Promise.all([
+        api.funnel(d),
+        api.trafficSource(d),
+        api.experimentCheckout(d).catch(() => null),   // optional
+        api.revenue(d),
+        api.aovBySource(d).catch(() => []),           // optional
+        api.topProducts(d, 10).catch(() => []),       // optional
+        api.category(d).catch(() => []),              // optional
+      ]);
+      setFunnel(f || null);
+      setTs(t || []);
+      setExp(e);
+      setRev(r || null);
+      setAov(a || []);
+      setTops(tp || []);
+      setCats(c || []);
+      setErr(null);
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const r = await api.retention(weeks);
-        setRet(r);
-      } catch (e) {
-        // retention is optional; show other tiles even if this fails
-        console.warn('retention fetch failed:', e);
-      }
-    })();
-  }, [weeks]);
+  async function loadRetention(w) {
+    try {
+      const r = await api.retention(w);
+      setRet(r);
+    } catch (e) {
+      console.warn('retention fetch failed:', e);
+    }
+  }
+
+  useEffect(() => { loadAll(days); }, [days]);
+  useEffect(() => { loadRetention(weeks); }, [weeks]);
 
   const revenueTotals = useMemo(() => {
-    if (!rev) return { orders: 0, revenue: 0 };
-    return { orders: rev.totals.orders, revenue: rev.totals.revenue };
+    if (!rev) return { orders: 0, revenue: 0, aov: null };
+    return {
+      orders: Number(rev?.totals?.orders || 0),
+      revenue: Number(rev?.totals?.revenue || 0),
+      aov: rev?.totals?.aov ?? null,
+    };
   }, [rev]);
 
   return (
     <div className="container" style={{ background:'#0b0f14', minHeight:'100vh' }}>
-      <h1 style={{ color:'#e6edf3' }}>CohortIQ</h1>
+      <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:12 }}>
+        <h1 style={{ color:'#e6edf3', margin:0 }}>CohortIQ</h1>
+        <button
+          onClick={applyApiBase}
+          style={{ marginLeft:'auto', background:'#161b22', border:'1px solid #30363d', color:'#e6edf3', padding:'6px 10px', borderRadius:6 }}
+          title="Change API base at runtime"
+        >
+          API: {apiBase}
+        </button>
+      </div>
+
       <SectionTitle>Acquisition & Conversion</SectionTitle>
 
       {err && <div className="card" style={{ borderColor:'#b4232a', color:'#ffd7db', background:'#2a1214' }}>Error: {err}</div>}
@@ -106,19 +138,20 @@ export default function App() {
           }
         >
           <div className="kpis" style={{ marginBottom: 10 }}>
-            <KPI label="Orders" value={revenueTotals.orders.toLocaleString()} />
-            <KPI label="Revenue" value={`$${revenueTotals.revenue.toLocaleString(undefined, { maximumFractionDigits: 2 })}`} />
+            <KPI label="Orders" value={Number(revenueTotals.orders).toLocaleString()} />
+            <KPI label="Revenue" value={`$${Number(revenueTotals.revenue).toLocaleString(undefined, { maximumFractionDigits: 2 })}`} />
+            <KPI label="AOV" value={revenueTotals.aov == null ? '—' : `$${Number(revenueTotals.aov).toLocaleString(undefined, { maximumFractionDigits: 2 })}`} />
           </div>
           <div style={{ height: 280 }}>
             <ResponsiveContainer>
-              <AreaChart data={rev.daily}>
+              <AreaChart data={(rev.daily || []).map(d => ({ ...d, revenue: Number(d.revenue || 0), orders: Number(d.orders || 0) }))}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="date" />
                 <YAxis />
                 <Tooltip />
                 <Legend />
-                <Area type="monotone" dataKey="orders" fill="#4cc9f0" stroke="#4cc9f0" />
-                <Area type="monotone" dataKey="revenue" fill="#43d9a3" stroke="#43d9a3" />
+                <Area type="monotone" dataKey="orders" fill="#4cc9f0" stroke="#4cc9f0" name="Orders" />
+                <Area type="monotone" dataKey="revenue" fill="#43d9a3" stroke="#43d9a3" name="Revenue" />
               </AreaChart>
             </ResponsiveContainer>
           </div>
@@ -129,13 +162,18 @@ export default function App() {
       {funnel && (
         <Card title={`Sessions funnel (last ${days} days)`}>
           <div className="kpis" style={{ marginBottom: 10 }}>
-            <KPI label="Views" value={funnel.totals.views.toLocaleString()} />
-            <KPI label="Adds" value={funnel.totals.adds.toLocaleString()} />
-            <KPI label="Purchases" value={funnel.totals.purchases.toLocaleString()} />
+            <KPI label="Views" value={Number(funnel?.totals?.views || 0).toLocaleString()} />
+            <KPI label="Adds" value={Number(funnel?.totals?.adds || 0).toLocaleString()} />
+            <KPI label="Purchases" value={Number(funnel?.totals?.purchases || 0).toLocaleString()} />
           </div>
           <div style={{ height: 300 }}>
             <ResponsiveContainer>
-              <LineChart data={funnel.daily}>
+              <LineChart data={(funnel.daily || []).map(d => ({
+                date: d.date,
+                views: Number(d.views || 0),
+                adds: Number(d.adds || 0),
+                purchases: Number(d.purchases || 0),
+              }))}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="date" />
                 <YAxis />
@@ -155,7 +193,12 @@ export default function App() {
         <Card title={`Traffic source effectiveness (last ${days} days)`}>
           <div style={{ height: 320, marginTop: 8 }}>
             <ResponsiveContainer>
-              <BarChart data={ts}>
+              <BarChart data={(ts || []).map(r => ({
+                ...r,
+                views: Number(r.views || 0),
+                adds: Number(r.adds || 0),
+                purchases: Number(r.purchases || 0),
+              }))}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="traffic_source" />
                 <YAxis />
@@ -172,15 +215,12 @@ export default function App() {
         {exp && (
           <Card title={`Checkout Button A/B (last ${days} days)`}>
             <div className="kpis" style={{ marginTop: 8 }}>
-              <KPI label="A CR" value={`${(exp.variant.A.cr * 100).toFixed(2)}%`} />
-              <KPI label="B CR" value={`${(exp.variant.B.cr * 100).toFixed(2)}%`} />
-              <KPI
-                label="Lift"
-                value={`${(exp.lift_abs * 100).toFixed(2)}%`}
-              />
+              <KPI label="A CR" value={`${((exp?.variant?.A?.cr || 0) * 100).toFixed(2)}%`} />
+              <KPI label="B CR" value={`${((exp?.variant?.B?.cr || 0) * 100).toFixed(2)}%`} />
+              <KPI label="Lift" value={`${((exp?.lift_abs || 0) * 100).toFixed(2)}%`} />
             </div>
             <div style={{ color: '#8b949e', fontSize: 12, marginTop: 8 }}>
-              z = {exp.z_score ?? '—'} (two-proportion z test)
+              z = {exp?.z_score ?? '—'} (two-proportion z test)
             </div>
           </Card>
         )}
@@ -189,7 +229,7 @@ export default function App() {
           <Card title={`Average Order Value by Source (last ${days} days)`}>
             <div style={{ height: 320, marginTop: 8 }}>
               <ResponsiveContainer>
-                <BarChart data={aov}>
+                <BarChart data={(aov || []).map(r => ({ ...r, aov: Number(r.aov || 0) }))}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="traffic_source" />
                   <YAxis />
@@ -203,7 +243,41 @@ export default function App() {
         )}
       </div>
 
-      {/* Top products */}
+      {/* Category breakdown */}
+      {cats?.length > 0 && (
+        <Card title={`Category breakdown (last ${days} days)`}>
+          <div className="kpis" style={{ marginBottom: 10 }}>
+            <KPI label="Categories" value={cats.length.toLocaleString()} />
+          </div>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+            <div style={{ height: 300 }}>
+              <ResponsiveContainer>
+                <BarChart data={cats}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="category" />
+                  <YAxis />
+                  <Tooltip />
+                  <Legend />
+                  <Bar dataKey="purchases" fill="#4cc9f0" name="Purchases" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+            <div style={{ height: 300 }}>
+              <ResponsiveContainer>
+                <PieChart>
+                  <Pie data={cats} dataKey="avg_price" nameKey="category" outerRadius={110} label>
+                    {cats.map((_, i) => <Cell key={i} />)}
+                  </Pie>
+                  <Tooltip />
+                  <Legend />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {/* Top products (note: backend returns qty & price) */}
       {tops?.length > 0 && (
         <Card title={`Top products (last ${days} days)`}>
           <div style={{ overflowX: 'auto' }}>
@@ -212,10 +286,9 @@ export default function App() {
                 <tr style={{ background:'#161b22' }}>
                   <th style={th}>Product</th>
                   <th style={th}>Category</th>
-                  <th style={th}>Views</th>
-                  <th style={th}>Adds</th>
-                  <th style={th}>Purchases</th>
-                  <th style={th}>Revenue</th>
+                  <th style={thNum}>Qty</th>
+                  <th style={thNum}>Price</th>
+                  <th style={thNum}>Revenue</th>
                 </tr>
               </thead>
               <tbody>
@@ -223,10 +296,9 @@ export default function App() {
                   <tr key={r.product_id} style={{ borderTop:'1px solid #30363d' }}>
                     <td style={td}>{r.product_id}</td>
                     <td style={td}>{r.category}</td>
-                    <td style={tdNum}>{r.views.toLocaleString()}</td>
-                    <td style={tdNum}>{r.adds.toLocaleString()}</td>
-                    <td style={tdNum}>{r.purchases.toLocaleString()}</td>
-                    <td style={tdNum}>${Number(r.revenue).toLocaleString(undefined,{maximumFractionDigits:2})}</td>
+                    <td style={tdNum}>{Number(r.qty || 0).toLocaleString()}</td>
+                    <td style={tdNum}>${Number(r.price || 0).toLocaleString(undefined,{maximumFractionDigits:2})}</td>
+                    <td style={tdNum}>${Number(r.revenue || 0).toLocaleString(undefined,{maximumFractionDigits:2})}</td>
                   </tr>
                 ))}
               </tbody>
@@ -246,7 +318,7 @@ export default function App() {
           }
         >
           <div style={{ fontSize:12, color:'#8b949e', marginBottom:8 }}>
-            Rows are signup cohorts (by week). Columns are retention week. Values show returning-user rate.
+            Rows are signup cohorts (by week). Columns are retention week. Values show returning-user <b>rate</b>.
           </div>
           <RetentionGrid matrix={ret.matrix} />
         </Card>
@@ -256,12 +328,13 @@ export default function App() {
 }
 
 const th = { textAlign:'left', padding:'8px 10px', borderBottom:'1px solid #30363d', color:'#e6edf3' };
+const thNum = { ...th, textAlign:'right' };
 const td = { padding:'8px 10px' };
 const tdNum = { ...td, textAlign:'right', fontVariantNumeric:'tabular-nums' };
 
 function RetentionGrid({ matrix }) {
-  // matrix: [{ cohort: '2025-08-11', weeks: [{w:0,rate:1.0}, {w:1,rate:0.42}, ...] }, ...]
-  const maxW = Math.max(...matrix.map(r => r.weeks.length));
+  // matrix: [{ cohort:'YYYY-MM-DD', weeks:[{w, rate}, ...] }]
+  const maxW = Math.max(0, ...matrix.map(r => r.weeks.length));
   return (
     <div style={{ overflowX:'auto' }}>
       <table style={{ borderCollapse:'collapse', color:'#e6edf3' }}>
