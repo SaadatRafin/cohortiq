@@ -1,1 +1,0 @@
-window.API_BASE = "https://unharsh-wearyingly-adalberto.ngrok-free.app/api";
