@@ -1,75 +1,105 @@
-const saved = typeof localStorage !== 'undefined' ? localStorage.getItem('apiBase') : null;
+const API_BASE =
+  (import.meta && import.meta.env && import.meta.env.VITE_API_BASE) ||
+  (typeof window !== "undefined" && window.API_BASE) ||
+  "/api"; // local dev behind nginx or vite proxy
 
-// Priority: window.__API_BASE__ (runtime) → Vite var → saved localStorage → sensible default
-const DEFAULT_BASE =
-  (typeof window !== 'undefined' && window.__API_BASE__) ||
-  (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_API_BASE) ||
-  saved ||
-  // ← update this to your reserved ngrok URL when needed
-  'https://unharsh-wearyingly-adalberto.ngrok-free.app/api';
-
-let API_BASE = DEFAULT_BASE;
-
-// Let the app change the API at runtime (handy with GitHub Pages)
-export function setApiBase(url) {
-  API_BASE = url.replace(/\/+$/, ''); // trim trailing slash
-  try { localStorage.setItem('apiBase', API_BASE); } catch {}
-}
-
-export function getApiBase() {
-  return API_BASE;
-}
-
-async function fetchJson(path) {
-  const res = await fetch(`${API_BASE}${path}`, {
-    headers: {
-      'Content-Type': 'application/json',
-      // Bypass ngrok’s browser warning page:
-      'ngrok-skip-browser-warning': 'true',
-    },
-    credentials: 'omit',
-    method: 'GET',
+async function apiGet(path, params = {}) {
+  const url = new URL(path, API_BASE);
+  Object.entries(params).forEach(([k, v]) => {
+    if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
   });
+
+  const res = await fetch(url.toString(), {
+    headers: {
+      "Accept": "application/json",
+      "ngrok-skip-browser-warning": "true",
+    },
+    credentials: "omit",
+  });
+
+  const ctype = res.headers.get("content-type") || "";
   if (!res.ok) {
-    const txt = await res.text().catch(() => '');
-    throw new Error(`${res.status} ${res.statusText}: ${txt.slice(0, 200)}`);
+    // Try to parse JSON error if any
+    let detail = `HTTP ${res.status}`;
+    try {
+      if (ctype.includes("application/json")) {
+        const j = await res.json();
+        detail = j?.detail ? `${detail} – ${j.detail}` : detail;
+      } else {
+        const t = await res.text();
+        if (t.startsWith("<!DOCTYPE")) detail = `${detail} – HTML response (CORS/proxy?)`;
+        else if (t) detail = `${detail} – ${t.slice(0, 200)}`;
+      }
+    } catch {}
+    const err = new Error(detail);
+    err.status = res.status;
+    throw err;
   }
+
+  if (!ctype.includes("application/json")) {
+    // Got HTML? Usually CORS/proxy/tunnel issue.
+    const text = await res.text();
+    throw new Error(`Expected JSON but got non-JSON (${ctype}). First bytes: ${text.slice(0, 120)}`);
+  }
+
   return res.json();
 }
 
-export const api = {
-  health: () => fetchJson('/health'),
-  funnel: (days = 30) => fetchJson(`/metrics/funnel?days=${days}`),
-  trafficSource: (days = 30) => fetchJson(`/metrics/traffic-source?days=${days}`),
-  experimentCheckout: (days = 30) => fetchJson(`/experiments/checkout_button?days=${days}`),
+// --- endpoint helpers (names your App.jsx can call) ---
+async function getHealth() {
+  return apiGet("/health");
+}
+async function getFunnel(days = 30) {
+  return apiGet("/metrics/funnel", { days });
+}
+async function getTrafficSource(days = 30) {
+  return apiGet("/metrics/traffic-source", { days });
+}
+// alias for any older code that called getTraffic
+const getTraffic = getTrafficSource;
 
-  revenue: (days = 30) => fetchJson(`/metrics/revenue?days=${days}`),
-  // Daily revenue-only series if you also want it:
-  revenueTrend: (days = 60) => fetchJson(`/metrics/revenue-trend?days=${days}`),
+async function getExperimentCheckout(days = 30) {
+  return apiGet("/experiments/checkout_button", { days });
+}
 
-  aovBySource: (days = 30) => fetchJson(`/metrics/aov-by-source?days=${days}`),
+// Optional / advanced endpoints (will 404 if not in backend yet)
+async function getRevenue(days = 30) {
+  return apiGet("/metrics/revenue", { days });
+}
+async function getAovBySource(days = 30) {
+  return apiGet("/metrics/aov-by-source", { days });
+}
+async function getTopProducts(days = 30, limit = 10) {
+  return apiGet("/metrics/top-products", { days, limit });
+}
+async function getRetention(weeks = 5) {
+  return apiGet("/metrics/retention", { weeks });
+}
 
-  // Backend returns qty & revenue, not views/adds/purchases — we pass through.
-  topProducts: (days = 30, limit = 10) =>
-    fetchJson(`/metrics/top-products?days=${days}&limit=${limit}`),
+const api = {
+  API_BASE,
+  getHealth,
+  getFunnel,
+  getTrafficSource,
+  getTraffic,
+  getExperimentCheckout,
+  getRevenue,
+  getAovBySource,
+  getTopProducts,
+  getRetention,
+};
 
-  // Backend returns: [{ cohort_week, series:[{week, users}, ...] }]
-  // Transform to a heatmap-friendly matrix with retention rates.
-  retention: async (weeks = 5) => {
-    const rows = await fetchJson(`/metrics/retention?weeks=${weeks}`);
-    // Build map: cohort → { w0Users, weeks:[{w, rate}] }
-    const byCohort = rows.map(r => {
-      const sorted = [...(r.series || [])].sort((a, b) => a.week - b.week);
-      const w0 = sorted.find(c => c.week === 0)?.users || 0;
-      const weeksArr = sorted.map(c => ({
-        w: c.week,
-        rate: w0 ? c.users / w0 : null,
-      }));
-      return { cohort: r.cohort_week, weeks: weeksArr };
-    });
-    return { matrix: byCohort };
-  },
-
-  // Optional: category breakdown
-  category: (days = 30) => fetchJson(`/metrics/category?days=${days}`),
+// Export both default and named so any import style works.
+export default api;
+export {
+  api,
+  getHealth,
+  getFunnel,
+  getTrafficSource,
+  getTraffic,
+  getExperimentCheckout,
+  getRevenue,
+  getAovBySource,
+  getTopProducts,
+  getRetention,
 };

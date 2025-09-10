@@ -1,230 +1,305 @@
-import { useEffect, useMemo, useState } from 'react';
-import { api } from './api';
+// src/App.jsx
+import { useEffect, useMemo, useState } from "react";
+import api from "./api";
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  BarChart, Bar, CartesianGrid, Legend
-} from 'recharts';
-import './index.css';
+  BarChart, Bar, CartesianGrid, Legend,
+} from "recharts";
+import "./index.css";
 
-/** Safe formatters so we never crash on undefined/null */
-const fmtInt = (v) =>
-  (v === undefined || v === null || Number.isNaN(Number(v)))
-    ? '–'
-    : Number(v).toLocaleString();
-
-const fmtPct = (v, digits = 1) =>
-  (v === undefined || v === null || !isFinite(v))
-    ? '–'
-    : `${(Number(v) * 100).toFixed(digits)}%`;
-
-const Card = ({ title, right, children }) => (
-  <div className="card" style={{ background: '#fff', border: '1px solid #eee', borderRadius: 12, padding: 16, marginBottom: 16 }}>
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 }}>
-      <h3 style={{ margin: 0, fontSize: 18, color: '#111' }}>{title}</h3>
-      {right}
-    </div>
-    {children}
-  </div>
-);
+const fmtInt = (n) => Number(n ?? 0).toLocaleString();
+const fmtPct = (x) =>
+  (x === null || x === undefined) ? "—" : `${(Number(x) * 100).toFixed(2)}%`;
+const fmtUsd = (n) =>
+  new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(Number(n ?? 0));
 
 export default function App() {
   const [days, setDays] = useState(30);
 
   const [funnel, setFunnel] = useState(null);
   const [traffic, setTraffic] = useState([]);
-  const [experiment, setExperiment] = useState(null);
+  const [exp, setExp] = useState(null);
 
-  const [loading, setLoading] = useState(false);
+  // optional metrics
+  const [revenue, setRevenue] = useState(null);
+  const [aovBySource, setAovBySource] = useState([]);
+  const [topProducts, setTopProducts] = useState([]);
+  const [retention, setRetention] = useState(null);
+
   const [err, setErr] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  // Derived totals for the hero row
+  const totals = useMemo(() => {
+    const t = funnel?.totals || {};
+    return {
+      views: t.views ?? 0,
+      adds: t.adds ?? 0,
+      purchases: t.purchases ?? 0,
+      v2a: funnel?.rates?.view_to_add ?? null,
+      a2p: funnel?.rates?.add_to_purchase ?? null,
+    };
+  }, [funnel]);
 
   useEffect(() => {
-    let alive = true;
+    let cancelled = false;
     setLoading(true);
     setErr(null);
 
-    Promise.all([
-      api.getFunnel(days),
-      api.getTraffic(days),
-      api.getAB(days),
-    ])
-      .then(([f, t, e]) => {
-        if (!alive) return;
-        setFunnel(f || null);
-        setTraffic(Array.isArray(t) ? t : []);
-        setExperiment(e || null);
-      })
-      .catch((e) => alive && setErr(e?.message || String(e)))
-      .finally(() => alive && setLoading(false));
+    (async () => {
+      try {
+        // Kick all requests in parallel, but catch optional ones individually.
+        const pFunnel = api.getFunnel(days);
+        const pTraffic = api.getTrafficSource(days);
+        const pExp = api.getExperimentCheckout(days);
 
-    return () => { alive = false; };
+        const pRevenue = api.getRevenue(days).catch((e) => {
+          if (e.status === 404) return null;
+          throw e;
+        });
+        const pAov = api.getAovBySource(days).catch((e) => {
+          if (e.status === 404) return [];
+          throw e;
+        });
+        const pProducts = api.getTopProducts(days, 10).catch((e) => {
+          if (e.status === 404) return [];
+          throw e;
+        });
+        const pRet = api.getRetention(5).catch((e) => {
+          if (e.status === 404) return null;
+          throw e;
+        });
+
+        const [fu, ts, ex, rev, aov, prod, ret] = await Promise.all([
+          pFunnel, pTraffic, pExp, pRevenue, pAov, pProducts, pRet,
+        ]);
+
+        if (cancelled) return;
+
+        setFunnel(fu);
+        setTraffic(Array.isArray(ts) ? ts : []);
+        setExp(ex);
+        setRevenue(rev);
+        setAovBySource(Array.isArray(aov) ? aov : []);
+        setTopProducts(Array.isArray(prod) ? prod : []);
+        setRetention(ret);
+      } catch (e) {
+        if (!cancelled) setErr(e.message || String(e));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+
+    return () => { cancelled = true; };
   }, [days]);
 
-  const funnelTotals = funnel?.totals ?? { views: 0, adds: 0, purchases: 0 };
-  const funnelRates = funnel?.rates ?? { view_to_add: null, add_to_purchase: null };
-
-  const trafficSorted = useMemo(() => {
-    // Sort by purchases desc, then adds desc
-    return [...traffic].sort((a, b) =>
-      (b?.purchases ?? 0) - (a?.purchases ?? 0) ||
-      (b?.adds ?? 0) - (a?.adds ?? 0)
-    );
-  }, [traffic]);
-
-  const abView = useMemo(() => {
-    if (!experiment?.variant) return null;
-    const A = experiment.variant.A ?? { n: 0, buyers: 0, cr: 0 };
-    const B = experiment.variant.B ?? { n: 0, buyers: 0, cr: 0 };
-    const liftAbs = experiment.lift_abs ?? 0;
-    const z = experiment.z_score ?? null;
-    const sig = (typeof z === 'number') ? Math.abs(z) >= 1.96 : false; // ~95% threshold
-    return { A, B, liftAbs, z, sig };
-  }, [experiment]);
+  const dailyFunnel = funnel?.daily?.map((d) => ({
+    date: d.date,
+    views: Number(d.views ?? 0),
+    adds: Number(d.adds ?? 0),
+    purchases: Number(d.purchases ?? 0),
+  })) ?? [];
 
   return (
-    <div style={{ maxWidth: 1200, margin: '0 auto', padding: 16, color: '#111' }}>
-      <header style={{ marginBottom: 16 }}>
-        <h1 style={{ margin: 0, fontSize: 24, color: '#111' }}>CohortIQ</h1>
-        <small style={{ color: '#555' }}>
-          {loading ? 'Loading…' : 'Live'} {err ? ` • Error: ${err}` : ''}
-        </small>
+    <div style={{ maxWidth: 1100, margin: "0 auto", padding: 16 }}>
+      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <h1 style={{ margin: 0 }}>CohortIQ</h1>
+        <div>
+          <label style={{ marginRight: 8 }}>Window (days):</label>
+          <select value={days} onChange={(e) => setDays(Number(e.target.value))}>
+            {[7, 14, 30, 60, 90].map((d) => (
+              <option key={d} value={d}>{d}</option>
+            ))}
+          </select>
+        </div>
       </header>
 
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
-        <label htmlFor="days" style={{ color: '#111' }}>Window:</label>
-        <select
-          id="days"
-          value={days}
-          onChange={e => setDays(Number(e.target.value))}
-          style={{ padding: '6px 8px', borderRadius: 8, border: '1px solid #ddd', color: '#111', background: '#fff' }}
-        >
-          {[7, 14, 30, 60, 90].map(d => <option key={d} value={d}>{d} days</option>)}
-        </select>
-      </div>
+      <p style={{ marginTop: 4, opacity: 0.7 }}>
+        API: <code>{api.API_BASE}</code>
+      </p>
+
+      {err && (
+        <div style={{ background: "#fee", border: "1px solid #f99", padding: 12, marginTop: 8 }}>
+          <strong>Failed to load:</strong> {err}
+        </div>
+      )}
 
       {/* KPIs */}
-      <div className="kpis" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0,1fr))', gap: 12, marginBottom: 16 }}>
-        <div className="kpi" style={{ background: '#fff', border: '1px solid #eee', borderRadius: 12, padding: 12 }}>
-          <div className="label" style={{ color: '#666' }}>Views</div>
-          <div className="value" style={{ fontSize: 20, fontWeight: 600, color: '#111' }}>{fmtInt(funnelTotals.views)}</div>
-        </div>
-        <div className="kpi" style={{ background: '#fff', border: '1px solid #eee', borderRadius: 12, padding: 12 }}>
-          <div className="label" style={{ color: '#666' }}>Adds</div>
-          <div className="value" style={{ fontSize: 20, fontWeight: 600, color: '#111' }}>{fmtInt(funnelTotals.adds)}</div>
-        </div>
-        <div className="kpi" style={{ background: '#fff', border: '1px solid #eee', borderRadius: 12, padding: 12 }}>
-          <div className="label" style={{ color: '#666' }}>Purchases</div>
-          <div className="value" style={{ fontSize: 20, fontWeight: 600, color: '#111' }}>{fmtInt(funnelTotals.purchases)}</div>
-        </div>
-        <div className="kpi" style={{ background: '#fff', border: '1px solid #eee', borderRadius: 12, padding: 12 }}>
-          <div className="label" style={{ color: '#666' }}>Conversion</div>
-          <div className="value" style={{ fontSize: 14, color: '#111' }}>
-            View→Add: <b>{fmtPct(funnelRates.view_to_add)}</b> • Add→Purchase: <b>{fmtPct(funnelRates.add_to_purchase)}</b>
-          </div>
-        </div>
-      </div>
+      <section className="kpis" style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginTop: 12 }}>
+        <KPI label="Views" value={fmtInt(totals.views)} />
+        <KPI label="Adds" value={fmtInt(totals.adds)} />
+        <KPI label="Purchases" value={fmtInt(totals.purchases)} />
+        <KPI label="Add → Purchase" value={fmtPct(totals.a2p)} />
+      </section>
 
-      {/* Sessions funnel over time */}
-      <Card title="Sessions funnel (daily)">
-        <div style={{ width: '100%', height: 280 }}>
-          <ResponsiveContainer>
-            <LineChart data={funnel?.daily ?? []} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="date" tick={{ fill: '#333' }} />
-              <YAxis tick={{ fill: '#333' }} />
-              <Tooltip />
-              <Legend />
-              <Line type="monotone" dataKey="views" stroke="#3366cc" dot={false} />
-              <Line type="monotone" dataKey="adds" stroke="#22aa99" dot={false} />
-              <Line type="monotone" dataKey="purchases" stroke="#dd4477" dot={false} />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
+      {/* Funnel chart */}
+      <Card title={`Sessions Funnel (last ${days} days)`} loading={loading}>
+        <ResponsiveContainer width="100%" height={260}>
+          <LineChart data={dailyFunnel}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey="date" />
+            <YAxis />
+            <Tooltip />
+            <Legend />
+            <Line type="monotone" dataKey="views" name="Views" dot={false} />
+            <Line type="monotone" dataKey="adds" name="Adds" dot={false} />
+            <Line type="monotone" dataKey="purchases" name="Purchases" dot={false} />
+          </LineChart>
+        </ResponsiveContainer>
       </Card>
 
-      {/* Traffic source performance */}
-      <Card title="Traffic source performance">
-        <div style={{ width: '100%', height: 320 }}>
-          <ResponsiveContainer>
-            <BarChart data={trafficSorted} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+      {/* Traffic Source */}
+      <Card title={`By Traffic Source (last ${days} days)`} loading={loading}>
+        <ResponsiveContainer width="100%" height={260}>
+          <BarChart data={traffic}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey="traffic_source" />
+            <YAxis />
+            <Tooltip />
+            <Legend />
+            <Bar dataKey="views" name="Views" />
+            <Bar dataKey="adds" name="Adds" />
+            <Bar dataKey="purchases" name="Purchases" />
+          </BarChart>
+        </ResponsiveContainer>
+
+        <table style={{ width: "100%", marginTop: 10 }}>
+          <thead>
+            <tr>
+              <th align="left">Source</th>
+              <th align="right">Views</th>
+              <th align="right">Adds</th>
+              <th align="right">Purchases</th>
+              <th align="right">V→A</th>
+              <th align="right">A→P</th>
+            </tr>
+          </thead>
+          <tbody>
+            {traffic.map((r) => (
+              <tr key={r.traffic_source}>
+                <td>{r.traffic_source}</td>
+                <td align="right">{fmtInt(r.views)}</td>
+                <td align="right">{fmtInt(r.adds)}</td>
+                <td align="right">{fmtInt(r.purchases)}</td>
+                <td align="right">{fmtPct(r.view_to_add)}</td>
+                <td align="right">{fmtPct(r.add_to_purchase)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Card>
+
+      {/* A/B Test */}
+      {exp && (
+        <Card title={`Checkout Button A/B (last ${days} days)`}>
+          <div className="kpis" style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
+            <KPI label="A CR" value={fmtPct(exp?.variant?.A?.cr)} />
+            <KPI label="B CR" value={fmtPct(exp?.variant?.B?.cr)} />
+            <KPI label="Abs Lift (B−A)" value={fmtPct(exp?.lift_abs)} />
+            <KPI label="z-score" value={(exp?.z_score ?? "—").toString()} />
+          </div>
+        </Card>
+      )}
+
+      {/* Revenue (optional) */}
+      {revenue && (
+        <Card title={`Revenue (last ${days} days)`}>
+          <div className="kpis" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
+            <KPI label="Total Revenue" value={fmtUsd(revenue?.totals?.revenue)} />
+            <KPI label="Orders" value={fmtInt(revenue?.totals?.orders)} />
+            <KPI label="AOV" value={fmtUsd(revenue?.totals?.aov)} />
+          </div>
+          <ResponsiveContainer width="100%" height={260}>
+            <LineChart data={(revenue?.daily ?? []).map(d => ({ date: d.date, revenue: Number(d.revenue ?? 0) }))}>
               <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="traffic_source" tick={{ fill: '#333' }} />
-              <YAxis tick={{ fill: '#333' }} />
+              <XAxis dataKey="date" />
+              <YAxis />
               <Tooltip />
               <Legend />
-              <Bar dataKey="views" fill="#3366cc" />
-              <Bar dataKey="adds" fill="#22aa99" />
-              <Bar dataKey="purchases" fill="#dd4477" />
-            </BarChart>
+              <Line type="monotone" dataKey="revenue" name="Revenue" dot={false} />
+            </LineChart>
           </ResponsiveContainer>
-        </div>
+        </Card>
+      )}
 
-        <div style={{ marginTop: 8 }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 8 }}>
+      {/* AOV by source (optional) */}
+      {aovBySource?.length > 0 && (
+        <Card title={`Avg Order Value by Source (last ${days} days)`}>
+          <table style={{ width: "100%" }}>
             <thead>
-              <tr style={{ textAlign: 'left', borderBottom: '1px solid #eee', color: '#111' }}>
-                <th style={{ padding: 8 }}>Source</th>
-                <th style={{ padding: 8 }}>Views</th>
-                <th style={{ padding: 8 }}>Adds</th>
-                <th style={{ padding: 8 }}>Purchases</th>
-                <th style={{ padding: 8 }}>View→Add</th>
-                <th style={{ padding: 8 }}>Add→Purchase</th>
+              <tr>
+                <th align="left">Source</th>
+                <th align="right">Orders</th>
+                <th align="right">Revenue</th>
+                <th align="right">AOV</th>
               </tr>
             </thead>
             <tbody>
-              {trafficSorted.map((r) => (
-                <tr key={r.traffic_source} style={{ borderBottom: '1px solid #f3f3f3' }}>
-                  <td style={{ padding: 8, color: '#111' }}>{r.traffic_source}</td>
-                  <td style={{ padding: 8, color: '#111' }}>{fmtInt(r.views)}</td>
-                  <td style={{ padding: 8, color: '#111' }}>{fmtInt(r.adds)}</td>
-                  <td style={{ padding: 8, color: '#111' }}>{fmtInt(r.purchases)}</td>
-                  <td style={{ padding: 8, color: '#111' }}>{fmtPct(r.view_to_add)}</td>
-                  <td style={{ padding: 8, color: '#111' }}>{fmtPct(r.add_to_purchase)}</td>
+              {aovBySource.map((r) => (
+                <tr key={r.traffic_source}>
+                  <td>{r.traffic_source}</td>
+                  <td align="right">{fmtInt(r.orders)}</td>
+                  <td align="right">{fmtUsd(r.revenue)}</td>
+                  <td align="right">{fmtUsd(r.aov)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
-        </div>
-      </Card>
+        </Card>
+      )}
 
-      {/* A/B experiment */}
-      <Card
-        title="Experiment: checkout_button (A/B)"
-        right={<span style={{ color: '#666' }}>{experiment ? `${experiment.days}d window` : ''}</span>}
-      >
-        {!abView ? (
-          <div style={{ color: '#666' }}>No experiment data.</div>
-        ) : (
-          <>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0,1fr))', gap: 12, marginBottom: 8 }}>
-              <div style={{ background: '#fff', border: '1px solid #eee', borderRadius: 12, padding: 12 }}>
-                <div style={{ color: '#666' }}>Variant A</div>
-                <div style={{ fontSize: 14, color: '#111' }}>
-                  Users: <b>{fmtInt(abView.A.n)}</b> • Buyers: <b>{fmtInt(abView.A.buyers)}</b> • CR: <b>{fmtPct(abView.A.cr, 2)}</b>
-                </div>
-              </div>
-              <div style={{ background: '#fff', border: '1px solid #eee', borderRadius: 12, padding: 12 }}>
-                <div style={{ color: '#666' }}>Variant B</div>
-                <div style={{ fontSize: 14, color: '#111' }}>
-                  Users: <b>{fmtInt(abView.B.n)}</b> • Buyers: <b>{fmtInt(abView.B.buyers)}</b> • CR: <b>{fmtPct(abView.B.cr, 2)}</b>
-                </div>
-              </div>
-              <div style={{ background: '#fff', border: '1px solid #eee', borderRadius: 12, padding: 12 }}>
-                <div style={{ color: '#666' }}>Result</div>
-                <div style={{ fontSize: 14, color: '#111' }}>
-                  Lift (B−A): <b>{fmtPct(abView.liftAbs, 2)}</b>
-                  {abView.z !== null && (
-                    <> • z: <b>{abView.z.toFixed(2)}</b> {abView.sig ? '✅ significant' : '⚠️ not significant'}</>
-                  )}
-                </div>
-              </div>
-            </div>
-          </>
-        )}
-      </Card>
+      {/* Top products (optional) */}
+      {topProducts?.length > 0 && (
+        <Card title={`Top Products (last ${days} days)`}>
+          <table style={{ width: "100%" }}>
+            <thead>
+              <tr>
+                <th align="left">Product</th>
+                <th align="left">Category</th>
+                <th align="right">Units</th>
+                <th align="right">Revenue</th>
+              </tr>
+            </thead>
+            <tbody>
+              {topProducts.map((r) => (
+                <tr key={r.product_id}>
+                  <td>{r.product_id}</td>
+                  <td>{r.category || "—"}</td>
+                  <td align="right">{fmtInt(r.units)}</td>
+                  <td align="right">{fmtUsd(r.revenue)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      )}
 
-      <footer style={{ marginTop: 24, color: '#666' }}>
-        <small>Backend: FastAPI • Frontend: Vite + React • Charts: Recharts</small>
-      </footer>
+      {/* Retention summary (optional, simple view) */}
+      {retention && (
+        <Card title="User Retention (coarse)">
+          <pre style={{ whiteSpace: "pre-wrap", margin: 0 }}>
+            {JSON.stringify(retention, null, 2)}
+          </pre>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+function KPI({ label, value }) {
+  return (
+    <div className="kpi" style={{ background: "#111", color: "#fff", borderRadius: 12, padding: 12 }}>
+      <div className="label" style={{ fontSize: 12, opacity: 0.8 }}>{label}</div>
+      <div className="value" style={{ fontSize: 22, fontWeight: 600 }}>{value}</div>
+    </div>
+  );
+}
+
+function Card({ title, children, loading }) {
+  return (
+    <div className="card" style={{ background: "#202020", color: "#fff", borderRadius: 16, padding: 16, marginTop: 16 }}>
+      <div style={{ fontWeight: 600, marginBottom: 8 }}>{title}</div>
+      {loading ? <div style={{ opacity: 0.7 }}>Loading…</div> : children}
     </div>
   );
 }
