@@ -109,7 +109,7 @@ export default function App() {
           <p style={{ margin: "6px 0 0", maxWidth: 720, color: "#9ca3af" }}>
             StayRate is a lightweight product analytics dashboard. It summarizes your traffic, add-to-cart,
             and purchase activity; breaks performance down by traffic source; visualizes A/B test results;
-            and—when available—shows revenue, top products, and weekly retention cohorts.
+            and shows revenue, top products, and weekly retention cohorts.
           </p>
         </div>
         <div>
