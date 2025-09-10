@@ -104,7 +104,14 @@ export default function App() {
   return (
     <div style={{ maxWidth: 1100, margin: "0 auto", padding: 16 }}>
       <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h1 style={{ margin: 0 }}>CohortIQ</h1>
+        <div>
+          <h1 style={{ margin: 0 }}>StayRate</h1>
+          <p style={{ margin: "6px 0 0", maxWidth: 720, color: "#9ca3af" }}>
+            StayRate is a lightweight product analytics dashboard. It summarizes your traffic, add-to-cart,
+            and purchase activity; breaks performance down by traffic source; visualizes A/B test results;
+            and—when available—shows revenue, top products, and weekly retention cohorts.
+          </p>
+        </div>
         <div>
           <label style={{ marginRight: 8 }}>Window (days):</label>
           <select value={days} onChange={(e) => setDays(Number(e.target.value))}>
