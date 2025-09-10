@@ -1,6 +1,5 @@
-// src/App.jsx
 import { useEffect, useMemo, useState } from "react";
-import api from "./api";
+import api, { API_BASE } from "./api";
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer,
   BarChart, Bar, CartesianGrid, Legend,
@@ -11,7 +10,8 @@ const fmtInt = (n) => Number(n ?? 0).toLocaleString();
 const fmtPct = (x) =>
   (x === null || x === undefined) ? "—" : `${(Number(x) * 100).toFixed(2)}%`;
 const fmtUsd = (n) =>
-  new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(Number(n ?? 0));
+  new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 0 })
+    .format(Number(n ?? 0));
 
 export default function App() {
   const [days, setDays] = useState(30);
@@ -28,8 +28,8 @@ export default function App() {
 
   const [err, setErr] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [online, setOnline] = useState(Boolean(API_BASE));
 
-  // Derived totals for the hero row
   const totals = useMemo(() => {
     const t = funnel?.totals || {};
     return {
@@ -48,34 +48,23 @@ export default function App() {
 
     (async () => {
       try {
-        // Kick all requests in parallel, but catch optional ones individually.
+        const pHealth = api.health().catch(() => ({ ok: false }));
         const pFunnel = api.getFunnel(days);
         const pTraffic = api.getTrafficSource(days);
         const pExp = api.getExperimentCheckout(days);
 
-        const pRevenue = api.getRevenue(days).catch((e) => {
-          if (e.status === 404) return null;
-          throw e;
-        });
-        const pAov = api.getAovBySource(days).catch((e) => {
-          if (e.status === 404) return [];
-          throw e;
-        });
-        const pProducts = api.getTopProducts(days, 10).catch((e) => {
-          if (e.status === 404) return [];
-          throw e;
-        });
-        const pRet = api.getRetention(5).catch((e) => {
-          if (e.status === 404) return null;
-          throw e;
-        });
+        const pRevenue = api.getRevenue(days).catch(() => null);
+        const pAov = api.getAovBySource(days).catch(() => []);
+        const pProducts = api.getTopProducts(days, 10).catch(() => []);
+        const pRet = api.getRetention(5).catch(() => null);
 
-        const [fu, ts, ex, rev, aov, prod, ret] = await Promise.all([
-          pFunnel, pTraffic, pExp, pRevenue, pAov, pProducts, pRet,
+        const [health, fu, ts, ex, rev, aov, prod, ret] = await Promise.all([
+          pHealth, pFunnel, pTraffic, pExp, pRevenue, pAov, pProducts, pRet,
         ]);
 
         if (cancelled) return;
 
+        setOnline(Boolean(API_BASE) && health?.ok);
         setFunnel(fu);
         setTraffic(Array.isArray(ts) ? ts : []);
         setExp(ex);
@@ -93,12 +82,13 @@ export default function App() {
     return () => { cancelled = true; };
   }, [days]);
 
-  const dailyFunnel = funnel?.daily?.map((d) => ({
-    date: d.date,
-    views: Number(d.views ?? 0),
-    adds: Number(d.adds ?? 0),
-    purchases: Number(d.purchases ?? 0),
-  })) ?? [];
+  const dailyFunnel =
+    funnel?.daily?.map((d) => ({
+      date: d.date,
+      views: Number(d.views ?? 0),
+      adds: Number(d.adds ?? 0),
+      purchases: Number(d.purchases ?? 0),
+    })) ?? [];
 
   return (
     <div style={{ maxWidth: 1100, margin: "0 auto", padding: 16 }}>
@@ -114,8 +104,11 @@ export default function App() {
         </div>
       </header>
 
-      <p style={{ marginTop: 4, opacity: 0.7 }}>
-        API: <code>{api.API_BASE}</code>
+      <p style={{ marginTop: 4, opacity: 0.8 }}>
+        API: <code>{API_BASE || "(offline fixtures)"}</code>{" "}
+        <span style={{ marginLeft: 10, fontWeight: 600 }}>
+          {online ? "✅ Connected" : "🛜 Offline (using static data)"}
+        </span>
       </p>
 
       {err && (
@@ -223,7 +216,7 @@ export default function App() {
       )}
 
       {/* AOV by source (optional) */}
-      {aovBySource?.length > 0 && (
+      {(aovBySource?.length ?? 0) > 0 && (
         <Card title={`Avg Order Value by Source (last ${days} days)`}>
           <table style={{ width: "100%" }}>
             <thead>
@@ -249,7 +242,7 @@ export default function App() {
       )}
 
       {/* Top products (optional) */}
-      {topProducts?.length > 0 && (
+      {(topProducts?.length ?? 0) > 0 && (
         <Card title={`Top Products (last ${days} days)`}>
           <table style={{ width: "100%" }}>
             <thead>
@@ -262,10 +255,10 @@ export default function App() {
             </thead>
             <tbody>
               {topProducts.map((r) => (
-                <tr key={r.product_id}>
+                <tr key={`${r.product_id}-${r.category ?? ""}`}>
                   <td>{r.product_id}</td>
                   <td>{r.category || "—"}</td>
-                  <td align="right">{fmtInt(r.units)}</td>
+                  <td align="right">{fmtInt(r.units ?? r.qty ?? r.quantity)}</td>
                   <td align="right">{fmtUsd(r.revenue)}</td>
                 </tr>
               ))}
@@ -276,7 +269,7 @@ export default function App() {
 
       {/* Retention summary (optional, simple view) */}
       {retention && (
-        <Card title="User Retention (coarse)">
+        <Card title="User Retention (cohorts)">
           <pre style={{ whiteSpace: "pre-wrap", margin: 0 }}>
             {JSON.stringify(retention, null, 2)}
           </pre>
