@@ -6,6 +6,17 @@ import {
 } from "recharts";
 import "./index.css";
 
+const COLORS = {
+  views: "#60a5fa",      // blue-400
+  adds: "#34d399",       // emerald-400
+  purchases: "#f59e0b",  // amber-500
+  axis: "#d1d5db",       // gray-300
+  grid: "#3a3a3a",       // gray-700
+  text: "#ffffff",
+  cardBg: "#202020",
+  kpiBg: "#111111",
+};
+
 const fmtInt = (n) => Number(n ?? 0).toLocaleString();
 const fmtPct = (x) =>
   (x === null || x === undefined) ? "—" : `${(Number(x) * 100).toFixed(2)}%`;
@@ -104,13 +115,6 @@ export default function App() {
         </div>
       </header>
 
-      <p style={{ marginTop: 4, opacity: 0.8 }}>
-        API: <code>{API_BASE || "(offline fixtures)"}</code>{" "}
-        <span style={{ marginLeft: 10, fontWeight: 600 }}>
-          {online ? "✅ Connected" : "🛜 Offline (using static data)"}
-        </span>
-      </p>
-
       {err && (
         <div style={{ background: "#fee", border: "1px solid #f99", padding: 12, marginTop: 8 }}>
           <strong>Failed to load:</strong> {err}
@@ -129,14 +133,14 @@ export default function App() {
       <Card title={`Sessions Funnel (last ${days} days)`} loading={loading}>
         <ResponsiveContainer width="100%" height={260}>
           <LineChart data={dailyFunnel}>
-            <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey="date" />
-            <YAxis />
+            <CartesianGrid stroke={COLORS.grid} strokeDasharray="3 3" />
+            <XAxis dataKey="date" tick={{ fill: COLORS.axis }} stroke={COLORS.axis} />
+            <YAxis tick={{ fill: COLORS.axis }} stroke={COLORS.axis} />
             <Tooltip />
-            <Legend />
-            <Line type="monotone" dataKey="views" name="Views" dot={false} />
-            <Line type="monotone" dataKey="adds" name="Adds" dot={false} />
-            <Line type="monotone" dataKey="purchases" name="Purchases" dot={false} />
+            <Legend wrapperStyle={{ color: COLORS.axis }} />
+            <Line type="monotone" dataKey="views" name="Views" dot={false} stroke={COLORS.views} strokeWidth={2} />
+            <Line type="monotone" dataKey="adds" name="Adds" dot={false} stroke={COLORS.adds} strokeWidth={2} />
+            <Line type="monotone" dataKey="purchases" name="Purchases" dot={false} stroke={COLORS.purchases} strokeWidth={2} />
           </LineChart>
         </ResponsiveContainer>
       </Card>
@@ -145,14 +149,14 @@ export default function App() {
       <Card title={`By Traffic Source (last ${days} days)`} loading={loading}>
         <ResponsiveContainer width="100%" height={260}>
           <BarChart data={traffic}>
-            <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey="traffic_source" />
-            <YAxis />
+            <CartesianGrid stroke={COLORS.grid} strokeDasharray="3 3" />
+            <XAxis dataKey="traffic_source" tick={{ fill: COLORS.axis }} stroke={COLORS.axis} />
+            <YAxis tick={{ fill: COLORS.axis }} stroke={COLORS.axis} />
             <Tooltip />
-            <Legend />
-            <Bar dataKey="views" name="Views" />
-            <Bar dataKey="adds" name="Adds" />
-            <Bar dataKey="purchases" name="Purchases" />
+            <Legend wrapperStyle={{ color: COLORS.axis }} />
+            <Bar dataKey="views" name="Views" fill={COLORS.views} />
+            <Bar dataKey="adds" name="Adds" fill={COLORS.adds} />
+            <Bar dataKey="purchases" name="Purchases" fill={COLORS.purchases} />
           </BarChart>
         </ResponsiveContainer>
 
@@ -204,12 +208,12 @@ export default function App() {
           </div>
           <ResponsiveContainer width="100%" height={260}>
             <LineChart data={(revenue?.daily ?? []).map(d => ({ date: d.date, revenue: Number(d.revenue ?? 0) }))}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="date" />
-              <YAxis />
+              <CartesianGrid stroke={COLORS.grid} strokeDasharray="3 3" />
+              <XAxis dataKey="date" tick={{ fill: COLORS.axis }} stroke={COLORS.axis} />
+              <YAxis tick={{ fill: COLORS.axis }} stroke={COLORS.axis} />
               <Tooltip />
-              <Legend />
-              <Line type="monotone" dataKey="revenue" name="Revenue" dot={false} />
+              <Legend wrapperStyle={{ color: COLORS.axis }} />
+              <Line type="monotone" dataKey="revenue" name="Revenue" dot={false} stroke={COLORS.purchases} strokeWidth={2} />
             </LineChart>
           </ResponsiveContainer>
         </Card>
@@ -267,21 +271,15 @@ export default function App() {
         </Card>
       )}
 
-      {/* Retention summary (optional, simple view) */}
-      {retention && (
-        <Card title="User Retention (cohorts)">
-          <pre style={{ whiteSpace: "pre-wrap", margin: 0 }}>
-            {JSON.stringify(retention, null, 2)}
-          </pre>
-        </Card>
-      )}
+      {/* Retention heatmap/table (now formatted) */}
+      {retention && <RetentionHeatmap data={retention} />}
     </div>
   );
 }
 
 function KPI({ label, value }) {
   return (
-    <div className="kpi" style={{ background: "#111", color: "#fff", borderRadius: 12, padding: 12 }}>
+    <div className="kpi" style={{ background: COLORS.kpiBg, color: COLORS.text, borderRadius: 12, padding: 12 }}>
       <div className="label" style={{ fontSize: 12, opacity: 0.8 }}>{label}</div>
       <div className="value" style={{ fontSize: 22, fontWeight: 600 }}>{value}</div>
     </div>
@@ -290,9 +288,74 @@ function KPI({ label, value }) {
 
 function Card({ title, children, loading }) {
   return (
-    <div className="card" style={{ background: "#202020", color: "#fff", borderRadius: 16, padding: 16, marginTop: 16 }}>
+    <div className="card" style={{ background: COLORS.cardBg, color: COLORS.text, borderRadius: 16, padding: 16, marginTop: 16 }}>
       <div style={{ fontWeight: 600, marginBottom: 8 }}>{title}</div>
       {loading ? <div style={{ opacity: 0.7 }}>Loading…</div> : children}
     </div>
+  );
+}
+
+/** Retention table with cell shading by retention % */
+function RetentionHeatmap({ data }) {
+  // normalize: [{cohort_week, series:[{week, users}, ...]}]
+  const rows = Array.isArray(data) ? data : [];
+  const maxWeeks = Math.max(
+    0,
+    ...rows.map(r => Math.max(0, ...(r.series || []).map(s => s.week || 0)))
+  );
+  const weekHeaders = Array.from({ length: maxWeeks + 1 }, (_, i) => i);
+
+  // helper: color scale (0->red, 1->green)
+  const cellColor = (p) => {
+    if (p === null || p === undefined) return "transparent";
+    const hue = 10 + Math.round(120 * p); // 10=red-ish, 130=green-ish
+    const light = 18 + Math.round(50 * p); // lighter for smaller p
+    return `hsl(${hue} 70% ${light}%)`;
+  };
+
+  const textOn = (p) => (p !== null && p !== undefined && p < 0.35 ? "#fff" : "#111");
+
+  return (
+    <Card title="User Retention (cohorts)">
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 2 }}>
+          <thead>
+            <tr>
+              <th align="left">Cohort week</th>
+              {weekHeaders.map((w) => (
+                <th key={w} align="right">W{w}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((c) => {
+              const base = (c.series || []).find(s => s.week === 0)?.users ?? null;
+              return (
+                <tr key={c.cohort_week}>
+                  <td style={{ whiteSpace: "nowrap" }}>{c.cohort_week}</td>
+                  {weekHeaders.map((w) => {
+                    const u = (c.series || []).find(s => s.week === w)?.users;
+                    const pct = base ? (u ?? 0) / base : null;
+                    return (
+                      <td key={w} align="right"
+                        style={{
+                          background: cellColor(pct),
+                          color: textOn(pct),
+                          borderRadius: 6,
+                          padding: "6px 8px",
+                          minWidth: 56,
+                          fontVariantNumeric: "tabular-nums",
+                        }}>
+                        {pct === null ? "—" : `${Math.round(pct * 100)}%`}
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </Card>
   );
 }
